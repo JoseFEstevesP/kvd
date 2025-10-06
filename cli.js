@@ -33,7 +33,8 @@ async function main() {
     url = answers.url;
   }
 
-  const tempDir = path.join(process.cwd(), 'temp_segments');
+  const videoId = url.split('/').pop();
+  const tempDir = path.join(process.cwd(), `temp_segments_${videoId}`);
 
   try {
     console.log('Obteniendo información del video...\n');
@@ -61,16 +62,23 @@ async function main() {
 
     console.log('\n✅ ¡Descarga completada exitosamente!');
     console.log(`Archivo guardado: ${outputFilename}`);
+    
+    const stats = fs.statSync(outputFilename);
+    const fileSizeInBytes = stats.size;
+    const fileSizeInMegabytes = fileSizeInBytes / (1024 * 1024);
+    const fileSizeInGigabytes = fileSizeInBytes / (1024 * 1024 * 1024);
+
+    if (fileSizeInGigabytes > 1) {
+        console.log(`Tamaño: ${fileSizeInGigabytes.toFixed(2)} GB`);
+    } else {
+        console.log(`Tamaño: ${fileSizeInMegabytes.toFixed(2)} MB`);
+    }
+
     console.log(`Ruta: ${path.resolve(outputFilename)}`);
 
   } catch (error) {
     console.error(`\n❌ Error: ${error.message}`);
-    
-    if (fs.existsSync(tempDir)) {
-      console.log('Limpiando archivos temporales...');
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-
+    console.error('La descarga ha fallado. Los archivos temporales no se han borrado para poder reanudarla más tarde.');
     process.exit(1);
   }
 }

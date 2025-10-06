@@ -1,135 +1,191 @@
 import { gotScraping } from 'got-scraping';
-import cliProgress from 'cli-progress';
+import * as cliProgress from 'cli-progress';
 import fs from 'fs';
 import { Parser } from 'm3u8-parser';
 import PQueue from 'p-queue';
 import path from 'path';
+import inquirer from 'inquirer';
 
 export async function downloadVod(playlistUrl, tempDir) {
-    console.log('Descargando playlist maestra...');
+	console.log('Descargando playlist maestra...');
 
-    try {
-        // Use gotScraping to fetch the master playlist
-        const masterPlaylistResponse = await gotScraping.get({
-            url: playlistUrl,
-            headers: {
-                'Accept': 'application/x-mpegURL, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': 'https://kick.com/',
-                'Origin': 'https://kick.com',
-            },
-            timeout: { request: 30000 }
-        });
+	try {
+		// Use gotScraping to fetch the master playlist
+		const masterPlaylistResponse = await gotScraping.get({
+			url: playlistUrl,
+			headers: {
+				Accept: 'application/x-mpegURL, text/plain, */*',
+				'Accept-Language': 'en-US,en;q=0.9',
+				Referer: 'https://kick.com/',
+				Origin: 'https://kick.com',
+			},
+			timeout: { request: 300000 }, // Increased from 60000 to 300000ms (5 minutes)
+		});
 
-        const masterPlaylistContent = masterPlaylistResponse.body;
-        console.log('[DEBUG] Master playlist fetched.');
-        console.log('[DEBUG] Master playlist parsed.');
+		const masterPlaylistContent = masterPlaylistResponse.body;
+		console.log('[DEBUG] Master playlist fetched.');
+		console.log('[DEBUG] Master playlist parsed.');
 
-        const parser = new Parser();
-        parser.push(masterPlaylistContent);
-        parser.end();
+		const parser = new Parser();
+		parser.push(masterPlaylistContent);
+		parser.end();
 
-        const manifest = parser.manifest;
+		const manifest = parser.manifest;
 
-        if (!manifest.playlists || manifest.playlists.length === 0) {
-            throw new Error('No se encontraron playlists en el archivo maestro.');
-        }
+		if (!manifest.playlists || manifest.playlists.length === 0) {
+			throw new Error('No se encontraron playlists en el archivo maestro.');
+		}
 
-        const sortedPlaylists = manifest.playlists.sort((a, b) => {
-            const bandwidthA = a.attributes?.BANDWIDTH || 0;
-            const bandwidthB = b.attributes?.BANDWIDTH || 0;
-            return bandwidthB - bandwidthA;
-        });
+		const sortedPlaylists = manifest.playlists.sort((a, b) => {
+			const bandwidthA = a.attributes?.BANDWIDTH || 0;
+			const bandwidthB = b.attributes?.BANDWIDTH || 0;
+			return bandwidthB - bandwidthA;
+		});
 
-        const bestPlaylist = sortedPlaylists[0];
-        const qualityPlaylistUrl = new URL(bestPlaylist.uri, playlistUrl).href;
-        console.log('[DEBUG] Best quality playlist selected:', qualityPlaylistUrl);
+		const qualityChoices = sortedPlaylists.map(playlist => {
+			const resolution = playlist.attributes.RESOLUTION;
+			const bandwidth = playlist.attributes.BANDWIDTH;
+			const name = resolution ? `${resolution.width}x${resolution.height} (${(bandwidth / 1000000).toFixed(2)} Mbps)` : `Audio (${(bandwidth / 1000000).toFixed(2)} Mbps)`;
+			return { name, value: playlist };
+		});
 
-        const resolution = bestPlaylist.attributes?.RESOLUTION?.width
-            ? `${bestPlaylist.attributes.RESOLUTION.width}x${bestPlaylist.attributes.RESOLUTION.height}`
-            : 'Desconocida';
+		const { selectedPlaylist } = await inquirer.prompt([
+			{
+				type: 'list',
+				name: 'selectedPlaylist',
+				message: 'Selecciona la calidad de video:',
+				choices: qualityChoices,
+				default: 0,
+			}
+		]);
 
-        console.log(`Calidad seleccionada: ${resolution}`);
-        console.log('Descargando lista de segmentos...');
+		const qualityPlaylistUrl = new URL(selectedPlaylist.uri, playlistUrl).href;
+		console.log('[DEBUG] Selected quality playlist:', qualityPlaylistUrl);
 
-        // Fetch the quality-specific playlist
-        const qualityPlaylistResponse = await gotScraping.get({
-            url: qualityPlaylistUrl,
-            headers: {
-                'Accept': 'application/x-mpegURL, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': 'https://kick.com/',
-                'Origin': 'https://kick.com',
-            },
-            timeout: { request: 30000 }
-        });
+		const resolution = selectedPlaylist.attributes.RESOLUTION;
+		console.log(`Calidad seleccionada: ${resolution ? `${resolution.width}x${resolution.height}` : 'Audio'}`);
+		console.log('Descargando lista de segmentos...');
 
-        const qualityPlaylistContent = qualityPlaylistResponse.body;
-        console.log('[DEBUG] Quality-specific playlist fetched.');
+		// Fetch the quality-specific playlist
+		const qualityPlaylistResponse = await gotScraping.get({
+			url: qualityPlaylistUrl,
+			headers: {
+				Accept: 'application/x-mpegURL, text/plain, */*',
+				'Accept-Language': 'en-US,en;q=0.9',
+				Referer: 'https://kick.com/',
+				Origin: 'https://kick.com',
+			},
+			timeout: { request: 300000 }, // Increased from 60000 to 300000ms (5 minutes)
+		});
 
-        const segmentParser = new Parser();
-        segmentParser.push(qualityPlaylistContent);
-        segmentParser.end();
-        console.log('[DEBUG] Quality-specific playlist parsed.');
+		const qualityPlaylistContent = qualityPlaylistResponse.body;
+		console.log('[DEBUG] Quality-specific playlist fetched.');
 
-        const segments = segmentParser.manifest.segments;
+		const segmentParser = new Parser();
+		segmentParser.push(qualityPlaylistContent);
+		segmentParser.end();
+		console.log('[DEBUG] Quality-specific playlist parsed.');
 
-        if (!segments || segments.length === 0) {
-            throw new Error('No se encontraron segmentos de video.');
-        }
+		const segments = segmentParser.manifest.segments;
 
-        console.log(`Total de segmentos a descargar: ${segments.length}`);
-        console.log('[DEBUG] Starting segment download queue and progress bar.');
+		if (!segments || segments.length === 0) {
+			throw new Error('No se encontraron segmentos de video.');
+		}
 
-        const progressBar = new cliProgress.SingleBar({
-            format: 'Progreso |{bar}| {percentage}% | {value}/{total} segmentos',
-            barCompleteChar: '\u2588',
-            barIncompleteChar: '\u2591',
-            hideCursor: true,
-        });
+		const existingSegments = new Set();
+		if (fs.existsSync(tempDir)) {
+			const files = fs.readdirSync(tempDir);
+			files.forEach(file => {
+				if (file.startsWith('segment_') && file.endsWith('.ts')) {
+					const match = file.match(/segment_(\d+)\.ts/);
+					if (match) {
+						existingSegments.add(parseInt(match[1], 10));
+					}
+				}
+			});
+		}
 
-        progressBar.start(segments.length, 0);
+		const segmentsToDownload = segments
+			.map((segment, index) => ({ ...segment, index }))
+			.filter(segment => !existingSegments.has(segment.index));
 
-        const queue = new PQueue({ concurrency: 10 });
-        let completed = 0;
+		console.log(`Total de segmentos: ${segments.length}`);
+		if (existingSegments.size > 0) {
+			console.log(`Reanudando descarga. Segmentos ya descargados: ${existingSegments.size}`);
+		}
+		console.log(`Segmentos a descargar: ${segmentsToDownload.length}`);
+		console.log('[DEBUG] Starting segment download queue and progress bar.');
 
-        // For downloading individual segments, we need to use gotScraping as well
-        const downloadPromises = segments.map((segment, index) => {
-            return queue.add(async () => {
-                const segmentUrl = new URL(segment.uri, qualityPlaylistUrl).href;
-                const segmentPath = path.join(tempDir, `segment_${String(index).padStart(6, '0')}.ts`);
+		const progressBar = new cliProgress.SingleBar({
+			format: 'Progreso |{bar}| {percentage}% | {value}/{total} segmentos',
+			barCompleteChar: '\u2588',
+			barIncompleteChar: '\u2591',
+			hideCursor: true,
+		});
 
-                // Download segment using gotScraping to bypass Cloudflare
-                const segmentResponse = await gotScraping.get({
-                    url: segmentUrl,
-                    headers: {
-                        'Accept': '*/*',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Origin': 'https://kick.com',
-                        'Referer': qualityPlaylistUrl,
-                        'Connection': 'keep-alive',
-                        'Sec-Fetch-Dest': 'empty',
-                        'Sec-Fetch-Mode': 'cors',
-                        'Sec-Fetch-Site': 'same-origin',
-                        'TE': 'trailers'
-                    },
-                    responseType: 'buffer', // Get response as buffer for binary data
-                    timeout: { request: 30000 }
-                });
+		progressBar.start(segments.length, existingSegments.size);
 
-                fs.writeFileSync(segmentPath, segmentResponse.body);
+		const queue = new PQueue({ concurrency: 10 });
+		let completed = existingSegments.size;
 
-                completed++;
-                progressBar.update(completed);
-            });
-        });
+		// For downloading individual segments, we need to use gotScraping as well
+		const downloadPromises = segmentsToDownload.map((segment) => {
+			return queue.add(async () => {
+				const { index } = segment;
+				const segmentUrl = new URL(segment.uri, qualityPlaylistUrl).href;
+				const segmentPath = path.join(
+					tempDir,
+					`segment_${String(index).padStart(6, '0')}.ts`
+				);
 
-        await Promise.all(downloadPromises);
+				const maxRetries = 5;
+				for (let i = 0; i < maxRetries; i++) {
+					try {
+						// Download segment using gotScraping to bypass Cloudflare
+						const segmentResponse = await gotScraping.get({
+							url: segmentUrl,
+							headers: {
+								Accept: '*/*',
+								'Accept-Language': 'en-US,en;q=0.9',
+								Origin: 'https://kick.com',
+								Referer: qualityPlaylistUrl,
+								Connection: 'keep-alive',
+								'Sec-Fetch-Dest': 'empty',
+								'Sec-Fetch-Mode': 'cors',
+								'Sec-Fetch-Site': 'same-origin',
+								TE: 'trailers',
+							},
+							responseType: 'buffer', // Get response as buffer for binary data
+							timeout: { request: 300000 }, // Increased from 60000 to 300000ms (5 minutes)
+						});
 
-        progressBar.stop();
-        console.log('¡Descarga de segmentos completada!');
-    } catch (error) {
-        console.error('[DEBUG] Download error:', error.message);
-        throw error;
-    }
+						fs.writeFileSync(segmentPath, segmentResponse.body);
+						break; // Success, exit retry loop
+					} catch (error) {
+						progressBar.log(
+							`\nError descargando segmento ${index} (intento ${
+								i + 1
+							}/${maxRetries}): ${error.message}\n`
+						);
+						if (i === maxRetries - 1) {
+							throw error; // Rethrow error after last retry
+						}
+						// Wait before retrying
+						await new Promise((resolve) => setTimeout(resolve, 2000 * (i + 1)));
+					}
+				}
+
+				completed++;
+				progressBar.update(completed);
+			});
+		});
+
+		await Promise.all(downloadPromises);
+
+		progressBar.stop();
+		console.log('¡Descarga de segmentos completada!');
+	} catch (error) {
+		console.error('[DEBUG] Download error:', error.message);
+		throw error;
+	}
 }
