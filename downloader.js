@@ -116,14 +116,13 @@ export async function downloadVod(playlistUrl, tempDir) {
 		console.log(`Segmentos a descargar: ${segmentsToDownload.length}`);
 		console.log('[DEBUG] Starting segment download queue and progress bar.');
 
-		const progressBar = new cliProgress.SingleBar({
+		const multibar = new cliProgress.MultiBar({
 			format: 'Progreso |{bar}| {percentage}% | {value}/{total} segmentos',
 			barCompleteChar: '\u2588',
 			barIncompleteChar: '\u2591',
 			hideCursor: true,
 		});
-
-		progressBar.start(segments.length, existingSegments.size);
+		const progressBar = multibar.create(segments.length, existingSegments.size);
 
 		const queue = new PQueue({ concurrency: 10 });
 		let completed = existingSegments.size;
@@ -162,7 +161,7 @@ export async function downloadVod(playlistUrl, tempDir) {
 						fs.writeFileSync(segmentPath, segmentResponse.body);
 						break; // Success, exit retry loop
 					} catch (error) {
-						progressBar.log(
+						multibar.log(
 							`\nError descargando segmento ${index} (intento ${
 								i + 1
 							}/${maxRetries}): ${error.message}\n`
@@ -182,7 +181,7 @@ export async function downloadVod(playlistUrl, tempDir) {
 
 		await Promise.all(downloadPromises);
 
-		progressBar.stop();
+		multibar.stop();
 		console.log('¡Descarga de segmentos completada!');
 	} catch (error) {
 		console.error('[DEBUG] Download error:', error.message);
