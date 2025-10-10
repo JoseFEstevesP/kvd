@@ -162,7 +162,7 @@ export async function downloadVod(playlistUrl, tempDir) {
 						fs.writeFileSync(segmentPath, segmentResponse.body);
 						break; // Success, exit retry loop
 					} catch (error) {
-						progressBar.log(
+						console.log(
 							`\nError descargando segmento ${index} (intento ${
 								i + 1
 							}/${maxRetries}): ${error.message}\n`
