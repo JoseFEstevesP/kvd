@@ -4,3 +4,4 @@ dist
 temp_segments
 *.mp4
 history.json
+error_url.txt
